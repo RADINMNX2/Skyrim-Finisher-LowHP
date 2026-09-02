@@ -1,0 +1,97 @@
+#include "Finisher.h"
+
+#include "settings.h"
+
+namespace {
+    bool IsTargetEligible(RE::Actor* a_actor) {
+        if (!a_actor) return false;
+        if (a_actor->IsDead()) return false;
+        if (a_actor->IsPlayerRef()) return false;
+
+        const float hp = a_actor->AsActorValueOwner()->GetActorValue(RE::ActorValue::kHealth);
+        return hp <= Settings::Get().finisherHP;
+    }
+
+    void Execute(RE::Actor* a_victim) {
+        auto* player = RE::PlayerCharacter::GetSingleton();
+        if (!player) return;
+
+        SKSE::log::info(
+            "Executing '{}' (hp={})",
+            a_victim->GetDisplayFullName(),
+            a_victim->AsActorValueOwner()->GetActorValue(RE::ActorValue::kHealth));
+
+        // Kill the target, credited to the player. The game plays the normal
+        // death/ragdoll. Killing a low-HP actor inside combat often lets the
+        // engine pick a killmove on this final blow.
+        a_victim->KillImpl(player, 0.0f, true, false);
+    }
+
+    class FinisherInputHandler : public RE::BSTEventSink<RE::InputEvent*> {
+    public:
+        using EventResult = RE::BSEventNotifyControl;
+
+        EventResult ProcessEvent(const RE::InputEvent* const* a_event, RE::BSTEventSource<RE::InputEvent*>*) override {
+            if (!a_event) return EventResult::kContinue;
+
+            for (auto* ev = *a_event; ev; ev = ev->next) {
+                if (ev->GetEventType() != RE::INPUT_EVENT_TYPE::kButton) {
+                    continue;
+                }
+
+                const auto* button = ev->AsButtonEvent();
+                if (!button || !button->IsDown()) {
+                    continue;
+                }
+
+                if (button->GetIDCode() != Settings::Get().finisherKey) {
+                    continue;
+                }
+
+                // Don't execute while the game is paused (menus open).
+                if (auto* ui = RE::UI::GetSingleton(); ui && ui->GameIsPaused()) {
+                    continue;
+                }
+
+                auto* player = RE::PlayerCharacter::GetSingleton();
+                if (!player) {
+                    continue;
+                }
+
+                auto* pick = RE::CrosshairPickData::GetSingleton();
+                if (!pick) {
+                    continue;
+                }
+
+                RE::NiPointer<RE::TESObjectREFR> crosshair = pick->targetActor.get();
+                if (!crosshair) {
+                    continue;
+                }
+
+                auto* actor = crosshair->As<RE::Actor>();
+                if (!IsTargetEligible(actor)) {
+                    continue;
+                }
+
+                Execute(actor);
+            }
+
+            return EventResult::kContinue;
+        }
+    };
+} // namespace
+
+namespace Finisher {
+    void Install() {
+        static FinisherInputHandler handler;
+
+        auto* eventSource = RE::BSInputDeviceManager::GetSingleton();
+        if (!eventSource) {
+            SKSE::log::error("Finisher: failed to get input event source");
+            return;
+        }
+
+        eventSource->AddEventSink(&handler);
+        SKSE::log::info("Finisher: installed input sink (key={:#x})", Settings::Get().finisherKey);
+    }
+} // namespace Finisher
