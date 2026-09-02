@@ -30,7 +30,6 @@ SKSEPluginLoad(const SKSE::LoadInterface* skse) {
 
     const auto* plugin = SKSE::PluginDeclaration::GetSingleton();
     SKSE::log::info("Plugin name: {}", plugin->GetName());
-    SKSE::log::info("Supported game version: {}", plugin->GetVersion());
 
     const auto* messaging = SKSE::GetMessagingInterface();
     if (!messaging || !messaging->RegisterListener("SKSE", MessageHandler)) {
