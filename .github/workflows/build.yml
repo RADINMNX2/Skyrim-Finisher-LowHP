@@ -1,0 +1,95 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    env:
+      VCPKG_BINARY_CACHE_DIR: ${{ github.workspace }}/.vcpkg-bincache
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up MSVC dev environment
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Install Ninja
+        uses: seanmiddleditch/gha-setup-ninja@v4
+
+      - name: Align VCPKG_ROOT
+        run: |
+          echo "VCPKG_ROOT=$env:VCPKG_INSTALLATION_ROOT" >> $env:GITHUB_ENV
+          echo "VCPKG_BINARY_SOURCES=clear;files,$env:VCPKG_BINARY_CACHE_DIR,readwrite" >> $env:GITHUB_ENV
+          New-Item -ItemType Directory -Path $env:VCPKG_BINARY_CACHE_DIR -Force | Out-Null
+
+      - name: Restore vcpkg binary cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ env.VCPKG_BINARY_CACHE_DIR }}
+          key: vcpkg-bincache-${{ runner.os }}-${{ hashFiles('vcpkg.json', 'vcpkg-configuration.json', 'cmake/x64-windows-skse.cmake') }}
+          restore-keys: vcpkg-bincache-${{ runner.os }}-
+
+      - name: Configure
+        run: cmake --preset build-release-msvc
+
+      - name: Build
+        run: cmake --build build/release-msvc
+
+      - name: Read build metadata
+        id: build_metadata
+        run: |
+          $cacheLine = Select-String -Path build\release-msvc\CMakeCache.txt -Pattern '^CMAKE_PROJECT_NAME:\w+=(.+)$' | Select-Object -First 1
+          if (-not $cacheLine) {
+              throw "CMAKE_PROJECT_NAME is missing from CMakeCache.txt"
+          }
+          $pluginName = $cacheLine.Matches[0].Groups[1].Value.Trim()
+          $dllPath = "build/release-msvc/$pluginName.dll"
+          if (-not (Test-Path -LiteralPath $dllPath)) {
+              throw "Expected plugin DLL was not produced: $dllPath"
+          }
+          "plugin_name=$pluginName" >> $env:GITHUB_OUTPUT
+          "dll_path=$dllPath" >> $env:GITHUB_OUTPUT
+
+      - name: Verify static CRT (no MSVC runtime deps)
+        run: |
+          $deps = & dumpbin /dependents '${{ steps.build_metadata.outputs.dll_path }}'
+          Write-Host ($deps | Out-String)
+          if ($deps -match '(MSVCP|VCRUNTIME)\d+(D)?\.dll') {
+              throw "DLL still depends on MSVC runtime; static CRT link failed. Match: $($Matches[0])"
+          }
+          Write-Host "OK: no MSVC runtime dependency."
+
+      - name: Package MO2 zip
+        run: |
+          $plugin = '${{ steps.build_metadata.outputs.plugin_name }}'
+          $root = Join-Path $env:RUNNER_TEMP "$plugin"
+          New-Item -ItemType Directory -Path (Join-Path $root 'SKSE\Plugins') -Force | Out-Null
+          Copy-Item '${{ steps.build_metadata.outputs.dll_path }}' (Join-Path $root "SKSE\Plugins\$plugin.dll")
+          New-Item -ItemType Directory -Path (Join-Path $root "SKSE\Plugins\$plugin") -Force | Out-Null
+          if (Test-Path config) {
+              Copy-Item config\* (Join-Path $root "SKSE\Plugins\$plugin\") -Recurse
+          }
+          New-Item -ItemType Directory -Path dist -Force | Out-Null
+          Compress-Archive -Path (Join-Path $root '*') -DestinationPath "dist\$plugin.zip" -Force
+
+      - name: Upload DLL
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.build_metadata.outputs.plugin_name }}-dll
+          path: ${{ steps.build_metadata.outputs.dll_path }}
+          if-no-files-found: error
+
+      - name: Upload MO2-installable zip
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.build_metadata.outputs.plugin_name }}-mo2-zip
+          path: dist/*.zip
+          if-no-files-found: error
