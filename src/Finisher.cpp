@@ -32,7 +32,7 @@ namespace {
     public:
         using EventResult = RE::BSEventNotifyControl;
 
-        EventResult ProcessEvent(const RE::InputEvent* const* a_event, RE::BSTEventSource<RE::InputEvent>*) override {
+        EventResult ProcessEvent(RE::InputEvent* const* a_event, RE::BSTEventSource<RE::InputEvent*>* a_eventSource) override {
             if (!a_event) return EventResult::kContinue;
 
             for (auto* ev = *a_event; ev; ev = ev->next) {
