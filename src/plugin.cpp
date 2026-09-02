@@ -4,7 +4,9 @@
 
 namespace {
     void OnDataLoaded() {
-        Settings::Load(SKSE::GetPluginDirectory() / "FinisherLowHP" / "FinisherLowHP.ini");
+        if (auto logsFolder = SKSE::log::log_directory()) {
+            Settings::Load(*logsFolder / "FinisherLowHP" / "FinisherLowHP.ini");
+        }
         Finisher::Install();
     }
 
